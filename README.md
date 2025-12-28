@@ -22,7 +22,7 @@ To access the dialog, choose one of the following options on the browser menu:
 
 | Note editor | Edit Menu | Context Menu |
 :-------------------------:|:-------------------------:|:-------------------------:
-<img src="https://github.com/user-attachments/assets/f618f907-357e-4fd9-a267-2d1a2aaff84c" style="width: 280px; height: 350px"> | <img src="https://github.com/user-attachments/assets/38644558-bd0a-4040-a29e-191ba0c1dcec" style="width: 350px; height: 350px;"> | <img src="https://github.com/user-attachments/assets/6b631119-e820-4ad9-baea-8b825e1a6064" style="width: 350px; height: 350px;">
+<img src="https://github.com/user-attachments/assets/f618f907-357e-4fd9-a267-2d1a2aaff84c" style="width: 220px; height: 300px"> | <img src="https://github.com/user-attachments/assets/38644558-bd0a-4040-a29e-191ba0c1dcec" style="width: 325px; height: 300px;"> | <img src="https://github.com/user-attachments/assets/6b631119-e820-4ad9-baea-8b825e1a6064" style="width: 325px; height: 300px;">
 
 ### 1. Select a dictionary
 
@@ -35,7 +35,7 @@ There are three text formats to choose from:
 - `Plain-Text`: format list elements to plain text.
 
 <p align="center">
-    <img src="https://github.com/user-attachments/assets/90150669-771e-49d2-ad62-02078670923d" style="width: 60%;">
+    <img src="https://github.com/user-attachments/assets/90150669-771e-49d2-ad62-02078670923d" style="width: 465px; height: 300px">
 </p>
 
 > [!WARNING]
