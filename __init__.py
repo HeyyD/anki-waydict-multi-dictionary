@@ -53,5 +53,8 @@ aqt.gui_hooks.editor_did_init_buttons.append(editor_button)
 # Register action in Anki > browse > editor
 aqt.gui_hooks.browser_will_show_context_menu.append(editor_action)
 
+# Register hook to auto-populate word when note changes
+aqt.gui_hooks.editor_did_load_note.append(EditorDialog.on_note_loaded)
+
 # Pre-import all configured dictionaries on startup
 aqt.gui_hooks.profile_did_open.append(import_all_dictionaries)

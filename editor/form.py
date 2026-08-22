@@ -259,7 +259,7 @@ class Ui_Dialog(object):
     def retranslateUi(self, Dialog):
         _translate = QCoreApplication.translate
         Dialog.setWindowTitle(_translate("Dialog", "Waydict"))
-        self.start.setText(_translate("Dialog", "Start"))
+        self.start.setText(_translate("Dialog", "Add definition"))
         self.label_3.setText(_translate("Dialog", "Source field"))
         self.label_4.setText(_translate("Dialog", "Destination field"))
         self.label_2.setText(_translate("Dialog", "Note type"))

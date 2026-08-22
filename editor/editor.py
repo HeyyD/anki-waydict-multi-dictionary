@@ -1,3 +1,5 @@
+import re
+
 import aqt
 import aqt.qt
 from anki.notes import Note
@@ -7,7 +9,7 @@ from aqt.browser import Browser
 from aqt.editor import Editor
 from aqt.operations import CollectionOp, QueryOp
 from aqt.operations.note import OpChangesWithCount
-from aqt.qt import QDialog, QFileDialog, QComboBox, QRadioButton
+from aqt.qt import QDialog, QFileDialog, QComboBox
 from aqt.utils import tooltip
 from bs4 import BeautifulSoup
 from typing import Union
@@ -28,7 +30,6 @@ class EditorDialog(QDialog):
             self.editor = context
             self.browser = None
             self.parent_window = self.editor.parentWindow
-            self.note = self.editor.note
         else:
             self.editor = None
             self.browser = context
@@ -50,6 +51,7 @@ class EditorDialog(QDialog):
 
         self._populate_dictionary_combo()
         self.update_definition_view("")
+        self.auto_populate_word()
         self.update_combo(self.form.text_format, self.config["text_format"])
         self.update_combo(self.form.note_type, self.config["note_type"])
         self.update_field_items()
@@ -187,6 +189,21 @@ class EditorDialog(QDialog):
             text = BeautifulSoup(text, "html.parser").prettify()
         self.form.definition_source.setPlainText(text)
 
+    def auto_populate_word(self) -> None:
+        if self.editor is None:
+            return
+        source_field = self.config["source_field"]
+        if not source_field:
+            return
+        try:
+            word = self.editor.note[source_field]
+        except KeyError:
+            return
+        if word:
+            self.form.word.setText(word)
+        elif self.form.word.text():
+            self.form.word.clear()
+
     def import_dictionary(self, path: str) -> None:
         def save(path: str):
             self.dictionary = Dictionary(path)
@@ -205,7 +222,7 @@ class EditorDialog(QDialog):
     def on_combo_change(self, combo: QComboBox) -> None:
         self.config[combo.objectName()] = combo.currentText()
 
-    def on_radio_change(self, radio: QRadioButton) -> None:
+    def on_radio_change(self, radio) -> None:
         self.config[radio.objectName()] = radio.isChecked()
 
     def on_browse(self) -> None:
@@ -239,7 +256,11 @@ class EditorDialog(QDialog):
         word = self.form.word.text()
 
         if not word:
-            return
+            if self.editor is not None:
+                self.auto_populate_word()
+                word = self.form.word.text()
+            if not word:
+                return
 
         if word != self._last_searched_word:
             self._last_searched_word = word
@@ -271,19 +292,32 @@ class EditorDialog(QDialog):
     def on_start(self) -> None:
         def op(col: Collection) -> OpChangesWithCount:
             if self.editor is not None:
-                note = add_note_definition(self.editor.note, self.dictionary)
+                word = self.form.word.text() or None
+                note = add_note_definition(
+                    self.editor.note, self.dictionary, self.config, word
+                )
 
                 if note is None:
                     return OpChangesWithCount(changes=None, count=0)
 
-                return OpChangesWithCount(changes=col.update_note(note), count=1)
+                if note.id != 0:
+                    return OpChangesWithCount(
+                        changes=col.update_note(note), count=1
+                    )
+                return OpChangesWithCount(changes=None, count=1)
             else:
-                notes = bulk_add_note_definition(self.nids, self.dictionary)
+                notes = bulk_add_note_definition(
+                    self.nids, self.dictionary, self.config
+                )
                 return OpChangesWithCount(
                     changes=col.update_notes(notes), count=len(notes)
                 )
 
         def on_success(changes: OpChangesWithCount) -> None:
+            if self.editor is not None:
+                self.editor.loadNote()
+                self.form.word.clear()
+                self.auto_populate_word()
             tooltip(f"Updated {changes.count} notes.", parent=self.parent_window)
 
         self.save_config()
@@ -296,17 +330,33 @@ class EditorDialog(QDialog):
                 return
 
         CollectionOp(self.parent_window, op).success(on_success).run_in_background()
-        self.close()
 
     def save_config(self) -> None:
         mw.addonManager.writeConfig(__name__, self.config)
 
+    def closeEvent(self, event) -> None:
+        EditorDialog._active_instance = None
+        super().closeEvent(event)
 
-def bulk_add_note_definition(nids: list[int], dictionary: Dictionary) -> list[Note]:
+    @classmethod
+    def on_note_loaded(cls, editor) -> None:
+        dialog = cls._active_instance
+        if dialog is None:
+            return
+        if dialog.editor is not None and editor is not dialog.editor:
+            return
+        if dialog.browser is not None and getattr(editor, "parentWindow", None) is not dialog.browser:
+            return
+        dialog.auto_populate_word()
+
+
+def bulk_add_note_definition(
+    nids: list[int], dictionary: Dictionary, config: dict
+) -> list[Note]:
     note_list = []
     for i, note_id in enumerate(nids, 1):
         note = mw.col.get_note(note_id)
-        note = add_note_definition(note, dictionary)
+        note = add_note_definition(note, dictionary, config)
 
         if isinstance(note, Note):
             note_list.append(note)
@@ -321,15 +371,15 @@ def bulk_add_note_definition(nids: list[int], dictionary: Dictionary) -> list[No
     return note_list
 
 
-def add_note_definition(note: Note, dictionary: Dictionary) -> Union[Note, None]:
-    config = mw.addonManager.getConfig(__name__)
-
+def add_note_definition(
+    note: Note, dictionary: Dictionary, config: dict, word: str = None
+) -> Union[Note, None]:
     if not validate_update(note, config):
         return None
 
-    definition = dictionary.find_definition(
-        note[config["source_field"]], config["text_format"]
-    )
+    lookup_word = word if word else note[config["source_field"]]
+
+    definition = dictionary.find_definition(lookup_word, config["text_format"])
 
     if not definition:
         return None
@@ -349,7 +399,8 @@ def validate_update(note: Note, config: dict) -> bool:
         return False
     if config["destination_field"] not in note_fields:
         return False
-    if note[config["destination_field"]] != "" and not config["overwrite_destination"]:
+    dest_value = re.sub(r"<[^>]+>", "", note[config["destination_field"]]).strip()
+    if dest_value and not config["overwrite_destination"]:
         return False
 
     return True
