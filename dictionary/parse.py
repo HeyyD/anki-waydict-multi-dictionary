@@ -7,6 +7,8 @@ def parse_definitions(
 ) -> str:
     """Parse definitions extracted from a `Dictionary` and return it as an html string."""
     title = f'<li data-dictionary="{dict_title}">' if dict_title else "<li>"
+    if len(definitions) == 1:
+        return parse_entry(definitions[0])
     text = "<ol>"
     for entry in definitions:
         text += title + parse_entry(entry) + "</li>"
