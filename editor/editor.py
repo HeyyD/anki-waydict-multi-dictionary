@@ -16,6 +16,9 @@ from . import form as form
 
 
 class EditorDialog(QDialog):
+    _active_instance: Union["EditorDialog", None] = None
+    _dict_cache: dict[str, Dictionary] = {}
+
     def __init__(
         self,
         context: Union[Editor, Browser],
@@ -33,17 +36,19 @@ class EditorDialog(QDialog):
             self.nids = nids
 
         QDialog.__init__(self, self.parent_window)
+        EditorDialog._active_instance = self
         self.form = form.Ui_Dialog()
         self.form.setupUi(self)
         self.show()
         self.config = mw.addonManager.getConfig(__name__)
+        self._migrate_config()
         self.dictionary = None
 
         note_types = [note_type.name for note_type in mw.col.models.all_names_and_ids()]
         self.form.note_type.addItems(note_types)
         self.form.text_format.addItems(["HTML-Full", "HTML-Brief", "Plain-Text"])
 
-        self.update_dict_path(self.config["dictionary_path"])
+        self._populate_dictionary_combo()
         self.update_definition_view("")
         self.update_combo(self.form.text_format, self.config["text_format"])
         self.update_combo(self.form.note_type, self.config["note_type"])
@@ -51,12 +56,21 @@ class EditorDialog(QDialog):
         self.update_combo(self.form.source_field, self.config["source_field"])
         self.update_combo(self.form.destination_field, self.config["destination_field"])
         self.form.overwrite_destination.setChecked(self.config["overwrite_destination"])
+        self._load_selected_dictionary()
+
+        self._last_searched_word = ""
+        self._suppress_dict_save = False
 
         self.form.text_format.currentIndexChanged.connect(self.on_text_format_change)
         self.form.browse.clicked.connect(self.on_browse)
+        self.form.dict_prev.clicked.connect(self.on_dict_prev)
+        self.form.dict_next.clicked.connect(self.on_dict_next)
         self.form.search.clicked.connect(self.on_search)
         self.form.start.clicked.connect(self.on_start)
 
+        self.form.dictionary.currentIndexChanged.connect(
+            self.on_dictionary_changed
+        )
         self.form.note_type.currentIndexChanged.connect(self.update_field_items)
         self.form.note_type.currentIndexChanged.connect(
             lambda: self.on_combo_change(self.form.note_type)
@@ -71,9 +85,79 @@ class EditorDialog(QDialog):
             lambda: self.on_radio_change(self.form.overwrite_destination)
         )
 
-    def update_dict_path(self, path: str) -> None:
+    def _migrate_config(self) -> None:
+        old_path = self.config.get("dictionary_path")
+        if old_path and not self.config.get("dictionaries"):
+            self.config["dictionaries"] = [old_path]
+            self.config["selected_dictionary"] = 0
+            del self.config["dictionary_path"]
+            self.save_config()
+
+    def _populate_dictionary_combo(self) -> None:
+        self.form.dictionary.blockSignals(True)
+        self.form.dictionary.clear()
+        for path in self.config["dictionaries"]:
+            if Dictionary.validate_file(path):
+                title = Dictionary.fetch_title(path)
+            else:
+                title = path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            self.form.dictionary.addItem(title, path)
+        selected = self.config.get("selected_dictionary", 0)
+        if 0 <= selected < self.form.dictionary.count():
+            self.form.dictionary.setCurrentIndex(selected)
+        self.form.dictionary.blockSignals(False)
+
+    def _current_dict_path(self) -> Union[str, None]:
+        idx = self.form.dictionary.currentIndex()
+        if idx < 0 or idx >= len(self.config["dictionaries"]):
+            return None
+        return self.config["dictionaries"][idx]
+
+    def _load_selected_dictionary(self) -> Union[bool, None]:
+        path = self._current_dict_path()
+        if not path:
+            self.dictionary = None
+            return False
+        if path in self._dict_cache:
+            self.dictionary = self._dict_cache[path]
+            return True
         if Dictionary.validate_file(path):
-            self.form.dictionary_title.setText(Dictionary.fetch_title(path))
+            self.import_dictionary(path)
+            return None
+        else:
+            self.dictionary = None
+            return False
+
+    def on_dictionary_changed(self) -> None:
+        idx = self.form.dictionary.currentIndex()
+        if idx < 0:
+            return
+        if not self._suppress_dict_save:
+            self.config["selected_dictionary"] = idx
+        loaded = self._load_selected_dictionary()
+        word = self.form.word.text()
+        if word and loaded is True:
+            self.on_search()
+
+    def on_dict_prev(self) -> None:
+        count = self.form.dictionary.count()
+        if count == 0:
+            return
+        idx = (self.form.dictionary.currentIndex() - 1) % count
+        self.form.dictionary.setCurrentIndex(idx)
+
+    def on_dict_next(self) -> None:
+        count = self.form.dictionary.count()
+        if count == 0:
+            return
+        idx = (self.form.dictionary.currentIndex() + 1) % count
+        self.form.dictionary.setCurrentIndex(idx)
+
+    def _default_dict_index(self) -> int:
+        default_path = self.config.get("default_dictionary")
+        if default_path and default_path in self.config["dictionaries"]:
+            return self.config["dictionaries"].index(default_path)
+        return 0
 
     def update_combo(self, combo: QComboBox, value: str) -> None:
         if value not in [combo.itemText(i) for i in range(combo.count())]:
@@ -106,6 +190,7 @@ class EditorDialog(QDialog):
     def import_dictionary(self, path: str) -> None:
         def save(path: str):
             self.dictionary = Dictionary(path)
+            self._dict_cache[path] = self.dictionary
 
         QueryOp(
             op=lambda col: save(path),
@@ -131,29 +216,51 @@ class EditorDialog(QDialog):
         if not path:
             return
 
-        if Dictionary.validate_file(path):
-            self.config["dictionary_path"] = path
-            self.form.dictionary_title.setText(Dictionary.fetch_title(path))
-            self.import_dictionary(path)
-        else:
+        if not Dictionary.validate_file(path):
             tooltip("Select a valid dictionary file.", parent=self.parent_window)
+            return
+
+        if path in self.config["dictionaries"]:
+            idx = self.config["dictionaries"].index(path)
+            self.form.dictionary.setCurrentIndex(idx)
+            return
+
+        title = Dictionary.fetch_title(path)
+        self.config["dictionaries"].append(path)
+        self.form.dictionary.blockSignals(True)
+        self.form.dictionary.addItem(title, path)
+        self.form.dictionary.setCurrentIndex(self.form.dictionary.count() - 1)
+        self.form.dictionary.blockSignals(False)
+        self.config["selected_dictionary"] = self.form.dictionary.currentIndex()
+        self.save_config()
+        self.import_dictionary(path)
 
     def on_search(self) -> None:
-        def lookup_definition(word: str) -> str:
-            definition = self.dictionary.find_definition(word, self.config["text_format"])
-            return definition if definition else f"No entries found for '{word}'."
-
         word = self.form.word.text()
 
         if not word:
             return
 
+        if word != self._last_searched_word:
+            self._last_searched_word = word
+            default_idx = self._default_dict_index()
+            if self.form.dictionary.currentIndex() != default_idx:
+                self._suppress_dict_save = True
+                self.form.dictionary.setCurrentIndex(default_idx)
+                self._suppress_dict_save = False
+                return
+
         if self.dictionary is None:
-            if Dictionary.validate_file(self.config["dictionary_path"]):
-                self.import_dictionary(self.config["dictionary_path"])
+            path = self._current_dict_path()
+            if path and Dictionary.validate_file(path):
+                self.import_dictionary(path)
             else:
                 tooltip("Select a valid dictionary file.", parent=self.parent_window)
                 return
+
+        def lookup_definition(word: str) -> str:
+            definition = self.dictionary.find_definition(word, self.config["text_format"])
+            return definition if definition else f"No entries found for '{word}'."
 
         QueryOp(
             op=lambda _: lookup_definition(word),
@@ -181,8 +288,9 @@ class EditorDialog(QDialog):
 
         self.save_config()
         if self.dictionary is None:
-            if Dictionary.validate_file(self.config["dictionary_path"]):
-                self.import_dictionary(self.config["dictionary_path"])
+            path = self._current_dict_path()
+            if path and Dictionary.validate_file(path):
+                self.import_dictionary(path)
             else:
                 tooltip("Select a valid dictionary file.", parent=self.parent_window)
                 return

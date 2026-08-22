@@ -6,6 +6,15 @@ from aqt.browser import Browser
 from aqt.utils import tooltip
 from aqt.qt import QMenu
 from .editor import EditorDialog
+from .dictionary import Dictionary
+
+
+def import_all_dictionaries() -> None:
+    config = aqt.mw.addonManager.getConfig(__name__)
+    from .editor.editor import EditorDialog
+    for path in config.get("dictionaries", []):
+        if Dictionary.validate_file(path) and path not in EditorDialog._dict_cache:
+            EditorDialog._dict_cache[path] = Dictionary(path)
 
 
 def editor_action(browser: Browser, menu: QMenu = None) -> None:
@@ -43,3 +52,6 @@ aqt.gui_hooks.editor_did_init_buttons.append(editor_button)
 
 # Register action in Anki > browse > editor
 aqt.gui_hooks.browser_will_show_context_menu.append(editor_action)
+
+# Pre-import all configured dictionaries on startup
+aqt.gui_hooks.profile_did_open.append(import_all_dictionaries)
