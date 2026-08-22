@@ -1,5 +1,7 @@
 {
-    "dictionary_path": "",
+    "dictionaries": [],
+    "selected_dictionary": 0,
+    "default_dictionary": "",
     "note_type": "",
     "source_field": "",
     "destination_field": "",
